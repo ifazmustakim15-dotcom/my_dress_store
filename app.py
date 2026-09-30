@@ -2,6 +2,7 @@ import os
 import sqlite3
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
+import datetime
 
 app = Flask(__name__)
 
@@ -105,18 +106,52 @@ def checkout():
     order_data = request.json
     total = order_data.get("total", 0)
     items = order_data.get("items", [])
+    shipping_info = order_data.get("shipping", {})
 
-    # Store clean item names & quantities as string
     items_summary = ", ".join([f"{item['name']} (x{item['quantity']})" for item in items])
+    
+    # Calculate realistic delivery dates
+    today = datetime.date.today()
+    shipping_speed = shipping_info.get("speed", "express")
+    
+    if shipping_speed == "express":
+        est_min = today + datetime.timedelta(days=3)
+        est_max = today + datetime.timedelta(days=5)
+        shipping_cost = 15.0 if total < 150 else 0.0
+    else:  # standard global delivery
+        est_min = today + datetime.timedelta(days=7)
+        est_max = today + datetime.timedelta(days=12)
+        shipping_cost = 0.0
+
+    delivery_window = f"{est_min.strftime('%b %d')} – {est_max.strftime('%b %d, %Y')}"
+    
+    final_tax = round(total * 0.05, 2)
+    final_total = round(total + final_tax + shipping_cost, 2)
 
     with get_db() as conn:
-        conn.execute('''
+        cursor = conn.cursor()
+        cursor.execute('''
             INSERT INTO orders (total_price, order_details)
             VALUES (?, ?)
-        ''', (total, items_summary))
+        ''', (final_total, items_summary))
+        order_id = cursor.lastrowid
         conn.commit()
 
-    return jsonify({"status": "success", "message": "Order placed successfully!"})
+    return jsonify({
+        "status": "success",
+        "message": "Order placed successfully!",
+        "receipt": {
+            "order_id": f"RA-{order_id + 1000}",
+            "date": datetime.datetime.now().strftime("%B %d, %Y - %I:%M %p"),
+            "items": items,
+            "subtotal": total,
+            "shipping_cost": shipping_cost,
+            "tax": final_tax,
+            "total": final_total,
+            "shipping": shipping_info,
+            "delivery_window": delivery_window
+        }
+    })
 
 @app.route("/api/orders", methods=["GET"])
 def get_orders():
